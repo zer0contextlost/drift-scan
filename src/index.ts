@@ -18,9 +18,11 @@ import { saveBaseline, loadBaseline, filterByBaseline } from './report/baseline'
 import { printStats } from './report/stats';
 import { readGoModuleName } from './parsers/go';
 import { readTsPathConfig } from './config/tsconfig';
+import { inferConfig } from './init';
+import { printWhy } from './commands/why';
 import { Severity, ScanResult, Violation, DriftConfig, DependencyNode } from './types';
 
-const VERSION = '1.5.0';
+const VERSION = '2.0.0';
 
 const program = new Command();
 
@@ -360,76 +362,99 @@ program
 
 program
   .command('init [dir]')
-  .description('Scaffold a .driftrc.json for a project by inspecting its directory structure')
-  .action(async (dir: string | undefined) => {
+  .description('Infer zones and layer order from the import graph and write .driftrc.json')
+  .option('--dry-run', 'print the config to stdout instead of writing it')
+  .option('--force', 'overwrite an existing .driftrc.json')
+  .action(async (dir: string | undefined, opts: { dryRun?: boolean; force?: boolean }) => {
     const targetDir = path.resolve(dir ?? '.');
     const configPath = path.join(targetDir, '.driftrc.json');
+    const { default: chalk } = await import('chalk');
 
-    if (fs.existsSync(configPath)) {
-      console.error(`.driftrc.json already exists at ${configPath}`);
+    if (!opts.dryRun && !opts.force && fs.existsSync(configPath)) {
+      console.error(`  .driftrc.json already exists — use --force to overwrite or --dry-run to preview`);
       process.exit(1);
     }
 
-    const { default: chalk } = await import('chalk');
+    console.log('');
+    console.log(`  ${chalk.gray('analyzing import graph…')}`);
 
-    const srcDir = fs.existsSync(path.join(targetDir, 'src'))
-      ? path.join(targetDir, 'src')
-      : targetDir;
+    const { config, warnings, cycleWarnings, zoneFileCounts } = await inferConfig(targetDir);
 
-    const subdirs = fs.readdirSync(srcDir, { withFileTypes: true })
-      .filter((d) => d.isDirectory() && !d.name.startsWith('.') &&
-        !['node_modules', 'dist', 'build', '__pycache__'].includes(d.name))
-      .map((d) => d.name);
+    const output = JSON.stringify(config, null, 2) + '\n';
 
-    const KNOWN_LAYERS: string[] = [
-      'domain', 'core', 'model', 'entity',
-      'app', 'application', 'service', 'usecase', 'use-case',
-      'adapter', 'interface',
-      'infrastructure', 'infra', 'persistence', 'repository', 'db',
-      'api', 'http', 'cli', 'cmd',
-    ];
-    const detected = subdirs.filter((d) => KNOWN_LAYERS.includes(d.toLowerCase()));
-    const unknown = subdirs.filter((d) => !KNOWN_LAYERS.includes(d.toLowerCase()));
-
-    const LAYER_ORDER: Record<string, number> = {
-      domain: 0, core: 0, model: 0, entity: 0,
-      app: 1, application: 1, service: 1, usecase: 1, 'use-case': 1,
-      adapter: 2, interface: 2,
-      infrastructure: 3, infra: 3, persistence: 3, repository: 3, db: 3,
-      api: 4, http: 4, cli: 4, cmd: 4,
-    };
-    const sorted = [...detected].sort(
-      (a, b) => (LAYER_ORDER[a.toLowerCase()] ?? 9) - (LAYER_ORDER[b.toLowerCase()] ?? 9)
-    );
-
-    const prefix = srcDir === path.join(targetDir, 'src') ? 'src/' : '';
-    const zones: Record<string, { paths: string[]; canImport: string[] }> = {};
-    sorted.forEach((name, idx) => {
-      zones[name] = {
-        paths: [`${prefix}${name}/**`],
-        canImport: sorted.slice(0, idx),
-      };
-    });
-
-    const config = {
-      layers: sorted,
-      zones,
-      ignore: ['**/*.test.ts', '**/*.spec.ts', '**/*.test.py', '**/*_test.go'],
-    };
-
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n');
+    if (opts.dryRun) {
+      console.log(output);
+    } else {
+      fs.writeFileSync(configPath, output);
+      console.log(`  ${chalk.green('✓')} wrote ${configPath}`);
+    }
 
     console.log('');
-    console.log(`  ${chalk.green('✓')} created ${configPath}`);
-    if (sorted.length > 0) console.log(`  detected layers: ${sorted.join(' → ')}`);
-    if (unknown.length > 0) {
-      console.log(`  ${chalk.yellow('!')} unrecognized dirs not assigned to any zone: ${unknown.join(', ')}`);
-      console.log(`    add them to zones{} or ignore[] in .driftrc.json`);
+    if (config.layers.length > 0) {
+      console.log(`  ${chalk.bold('layers inferred')}  (bottom → top)`);
+      for (const layer of config.layers) {
+        const count = zoneFileCounts[layer] ?? 0;
+        const canStr = config.zones[layer]?.canImport.join(', ') || chalk.gray('—');
+        console.log(`    ${chalk.cyan(layer)}  ${count} files  can-import: ${canStr}`);
+      }
     }
-    if (sorted.length === 0) {
-      console.log(`  ${chalk.yellow('!')} no recognizable layer directories found — edit .driftrc.json to define your zones`);
+
+    for (const w of warnings) {
+      console.log(`  ${chalk.yellow('!')} ${w}`);
+    }
+    for (const w of cycleWarnings) {
+      console.log(`  ${chalk.red('⚠')} ${w}`);
+    }
+    if (cycleWarnings.length > 0) {
+      console.log(`  ${chalk.gray('Circular zones are placed at the end of layers[] — edit canImport to resolve.')}`);
     }
     console.log('');
+    if (config.layers.length > 0 && !opts.dryRun) {
+      console.log(`  run ${chalk.bold('drift scan')} to see violations against the inferred architecture`);
+      console.log('');
+    }
+  });
+
+// ─── why ─────────────────────────────────────────────────────────────────────
+
+program
+  .command('why <file>')
+  .description('Explain a file\'s zone, imports, dependents, and any violations')
+  .action(async (file: string) => {
+    const targetFile = path.resolve(file);
+
+    if (!fs.existsSync(targetFile)) {
+      console.error(`File not found: ${targetFile}`);
+      process.exit(1);
+    }
+
+    let config: DriftConfig;
+    let rootDir: string;
+    try {
+      rootDir = path.dirname(targetFile);
+      config = loadConfig(rootDir);
+      // Walk up to find the actual root (where .driftrc.json is)
+      let d = path.dirname(targetFile);
+      while (d !== path.dirname(d)) {
+        if (fs.existsSync(path.join(d, '.driftrc.json'))) { rootDir = d; break; }
+        d = path.dirname(d);
+      }
+      config = loadConfig(rootDir);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+
+    const goModuleName = await readGoModuleName(rootDir) ?? undefined;
+    const tsPathConfig = readTsPathConfig(rootDir) ?? undefined;
+    const ctx = { projectRoot: rootDir, goModuleName, tsPathConfig };
+
+    const files = await crawlFiles(rootDir, config);
+    const nodes = await buildGraph(files, rootDir, config, ctx);
+    const raw = checkGraph(nodes, config);
+    const violations = rankViolations(raw, config);
+
+    await printWhy(targetFile, nodes, violations, config, rootDir);
   });
 
 // ─── helpers ─────────────────────────────────────────────────────────────────

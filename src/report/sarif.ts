@@ -1,7 +1,7 @@
 import path from 'path';
 import { ScanResult, Severity, Violation } from '../types';
 
-const VERSION = '1.5.0';
+const VERSION = '2.0.0';
 const TOOL_URI = 'https://github.com/zer0contextlost/drift-scan';
 
 function severityToLevel(severity: Severity): string {

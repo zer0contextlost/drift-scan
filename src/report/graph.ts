@@ -1,4 +1,5 @@
 import { DependencyNode, DriftConfig } from '../types';
+import { resolveToFile } from '../util/resolve';
 
 interface ZoneEdge {
   from: string;
@@ -10,18 +11,12 @@ interface ZoneEdge {
 export function buildZoneGraph(nodes: DependencyNode[], config: DriftConfig): ZoneEdge[] {
   const edgeMap = new Map<string, ZoneEdge>();
 
+  const nodeByFile = new Map(nodes.map((n) => [n.file, n]));
   for (const node of nodes) {
     if (!node.zone) continue;
     for (const imp of node.imports) {
-      // Find the target zone from the node list
-      const toNode = nodes.find((n) => {
-        const nf = n.file.split('\\').join('/');
-        const tf = imp.toPath.split('\\').join('/');
-        return nf === tf || nf === tf + '.ts' || nf === tf + '.js' ||
-          nf === tf + '.py' || nf === tf + '.go' ||
-          nf === tf + '/index.ts' || nf === tf + '/__init__.py' ||
-          (nf.startsWith(tf + '/') && nf.endsWith('.go'));
-      });
+      const toFile = resolveToFile(imp.toPath, nodeByFile);
+      const toNode = toFile ? nodeByFile.get(toFile) : undefined;
       if (!toNode?.zone || toNode.zone === node.zone) continue;
 
       const key = `${node.zone}→${toNode.zone}`;

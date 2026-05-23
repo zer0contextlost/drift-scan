@@ -75,7 +75,7 @@ describe('SARIF output', () => {
     const tool = run['tool'] as Record<string, unknown>;
     const driver = tool['driver'] as Record<string, unknown>;
     expect(driver['name']).toBe('drift-scan');
-    expect(driver['version']).toBe('1.5.0');
+    expect(driver['version']).toBe('2.0.0');
   });
 
   it('rules are deduplicated', () => {

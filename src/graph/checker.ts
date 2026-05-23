@@ -1,4 +1,5 @@
 import { DependencyNode, DriftConfig, Violation, ViolationType } from '../types';
+import { resolveToFile as resolveFile } from '../util/resolve';
 
 let violationCounter = 0;
 
@@ -6,39 +7,8 @@ function makeId(type: ViolationType, fromFile: string, line: number): string {
   return `drift-${type}-${fromFile}:${line}-${violationCounter++}`;
 }
 
-function norm(p: string): string {
-  return p.split('\\').join('/');
-}
-
 function resolveToFile(toPath: string, _fromFile: string, nodeByFile: Map<string, DependencyNode>): string | null {
-  // Strip .js/.jsx extension — TS projects often import with .js for ESM compatibility
-  const stripped = toPath.replace(/\.(js|jsx)$/, '');
-  const toNorm = norm(toPath);
-  const strippedNorm = norm(stripped);
-
-  for (const file of nodeByFile.keys()) {
-    const fileNorm = norm(file);
-    // Try both the original path and the stripped version (for .js → .ts resolution)
-    for (const base of toNorm === strippedNorm ? [toNorm] : [toNorm, strippedNorm]) {
-      if (
-        fileNorm === base ||
-        fileNorm === base + '.ts' ||
-        fileNorm === base + '.tsx' ||
-        fileNorm === base + '.js' ||
-        fileNorm === base + '.jsx' ||
-        fileNorm === base + '.py' ||
-        fileNorm === base + '.go' ||
-        fileNorm === base + '/index.ts' ||
-        fileNorm === base + '/index.js' ||
-        fileNorm === base + '/__init__.py' ||
-        // Go package imports resolve to a directory — match any .go file inside it
-        (fileNorm.startsWith(base + '/') && fileNorm.endsWith('.go'))
-      ) {
-        return file;
-      }
-    }
-  }
-  return null;
+  return resolveFile(toPath, nodeByFile);
 }
 
 // Count how many files in the same zone import a given file

@@ -1,0 +1,42 @@
+{
+  "layers": ["types", "util", "config", "parsers", "crawler", "graph", "rank", "report", "commands"],
+  "zones": {
+    "types": {
+      "paths": ["src/types.ts"],
+      "canImport": []
+    },
+    "util": {
+      "paths": ["src/util/**"],
+      "canImport": ["types"]
+    },
+    "config": {
+      "paths": ["src/config/**"],
+      "canImport": ["types"]
+    },
+    "parsers": {
+      "paths": ["src/parsers/**"],
+      "canImport": ["types", "util", "config"]
+    },
+    "crawler": {
+      "paths": ["src/crawler/**"],
+      "canImport": ["types", "util", "config"]
+    },
+    "graph": {
+      "paths": ["src/graph/**"],
+      "canImport": ["types", "util", "config", "parsers"]
+    },
+    "rank": {
+      "paths": ["src/rank/**"],
+      "canImport": ["types"]
+    },
+    "report": {
+      "paths": ["src/report/**"],
+      "canImport": ["types", "util"]
+    },
+    "commands": {
+      "paths": ["src/commands/**", "src/init/**"],
+      "canImport": ["types", "util", "config", "parsers", "crawler", "graph", "rank", "report"]
+    }
+  },
+  "ignore": ["**/*.test.ts", "**/*.spec.ts", "**/*.d.ts", "tests/**", "dist/**", "src/index.ts"]
+}
