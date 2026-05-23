@@ -13,6 +13,9 @@ import { formatJson } from './report/json';
 import { formatSarif } from './report/sarif';
 import { buildZoneGraph, formatMermaid, formatDot } from './report/graph';
 import { filterBySeverity } from './report/filters';
+import { applyExceptions } from './report/exceptions';
+import { saveBaseline, loadBaseline, filterByBaseline } from './report/baseline';
+import { printStats } from './report/stats';
 import { readGoModuleName } from './parsers/go';
 import { readTsPathConfig } from './config/tsconfig';
 import { Severity, ScanResult, Violation, DriftConfig, DependencyNode } from './types';
@@ -38,6 +41,8 @@ program
   .option('--min-severity <severity>', 'only show violations at this severity or above')
   .option('--output <file>', 'write report to a file instead of stdout')
   .option('--watch', 'watch for file changes and re-scan automatically')
+  .option('--save-baseline <file>', 'save current violations as a baseline and exit')
+  .option('--from-baseline <file>', 'only report violations not present in baseline file')
   .action(async (
     dir: string | undefined,
     opts: {
@@ -48,6 +53,8 @@ program
       minSeverity?: string;
       output?: string;
       watch?: boolean;
+      saveBaseline?: string;
+      fromBaseline?: string;
     },
   ) => {
     const targetDir = path.resolve(dir ?? '.');
@@ -72,6 +79,31 @@ program
       const raw = checkGraph(nodes, config);
       let violations = rankViolations(raw, config);
 
+      // Apply config-level exceptions
+      const { kept: afterExceptions, excepted } = applyExceptions(violations, targetDir, config);
+      violations = afterExceptions;
+
+      // --save-baseline: persist current violations and exit
+      if (opts.saveBaseline) {
+        saveBaseline(violations, targetDir, opts.saveBaseline, VERSION);
+        console.log(`baseline saved to ${opts.saveBaseline} (${violations.length} violations)`);
+        return { result: { version: VERSION, scannedFiles: files.length, violations, durationMs: Date.now() - start }, exitCode: 0 };
+      }
+
+      // --from-baseline: suppress violations already in baseline
+      let baselineSuppressed = 0;
+      if (opts.fromBaseline) {
+        try {
+          const baseline = loadBaseline(opts.fromBaseline);
+          const { kept, suppressed } = filterByBaseline(violations, baseline, targetDir);
+          violations = kept;
+          baselineSuppressed = suppressed;
+        } catch (e) {
+          console.error((e as Error).message);
+          process.exit(1);
+        }
+      }
+
       if (opts.minSeverity) {
         violations = filterBySeverity(violations, opts.minSeverity as Severity);
       }
@@ -81,6 +113,8 @@ program
         scannedFiles: files.length,
         violations,
         durationMs: Date.now() - start,
+        excepted,
+        baselineSuppressed,
       };
 
       let exitCode = 0;
@@ -258,6 +292,34 @@ program
     } else {
       await printReport(result, rootDir);
     }
+  });
+
+// ─── stats ───────────────────────────────────────────────────────────────────
+
+program
+  .command('stats [dir]')
+  .description('Show architecture health: zone sizes, import counts, violation breakdown')
+  .action(async (dir: string | undefined) => {
+    const targetDir = path.resolve(dir ?? '.');
+
+    let config: DriftConfig;
+    try {
+      config = loadConfig(targetDir);
+    } catch (e) {
+      console.error((e as Error).message);
+      process.exit(1);
+    }
+
+    const goModuleName = await readGoModuleName(targetDir) ?? undefined;
+    const tsPathConfig = readTsPathConfig(targetDir) ?? undefined;
+    const ctx = { projectRoot: targetDir, goModuleName, tsPathConfig };
+    const files = await crawlFiles(targetDir, config);
+    const nodes = await buildGraph(files, targetDir, config, ctx);
+    const raw = checkGraph(nodes, config);
+    const violations = rankViolations(raw, config);
+    const { kept } = applyExceptions(violations, targetDir, config);
+
+    await printStats(nodes, kept, config, targetDir);
   });
 
 // ─── graph ───────────────────────────────────────────────────────────────────

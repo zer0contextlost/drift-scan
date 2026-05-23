@@ -31,6 +31,12 @@ export async function printReport(result: ScanResult, targetDir: string): Promis
 
   if (violations.length === 0) {
     console.log(`  ${chalk.green('✓')} no violations found`);
+    if (result.excepted || result.baselineSuppressed) {
+      const parts = [];
+      if (result.excepted) parts.push(`${result.excepted} excepted`);
+      if (result.baselineSuppressed) parts.push(`${result.baselineSuppressed} in baseline`);
+      console.log(`  ${chalk.gray(`(${parts.join(', ')} not shown)`)}`);
+    }
     console.log('');
     console.log(`  scanned ${scannedFiles} files in ${formatDuration(durationMs)}`);
     console.log('');
@@ -87,7 +93,15 @@ export async function printReport(result: ScanResult, targetDir: string): Promis
     console.log('');
   }
 
+  const extras: string[] = [];
+  if (result.excepted) extras.push(`${result.excepted} excepted`);
+  if (result.baselineSuppressed) extras.push(`${result.baselineSuppressed} in baseline`);
+
   console.log(`  ─────────────────────────────────────────────────────`);
-  console.log(`  ${violations.length} violation${violations.length !== 1 ? 's' : ''}  ·  scanned ${scannedFiles} files in ${formatDuration(durationMs)}`);
+  console.log(
+    `  ${violations.length} violation${violations.length !== 1 ? 's' : ''}` +
+    (extras.length ? chalk.gray(`  (${extras.join(', ')} not shown)`) : '') +
+    `  ·  scanned ${scannedFiles} files in ${formatDuration(durationMs)}`
+  );
   console.log('');
 }

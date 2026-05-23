@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { DriftConfig } from '../types';
+import { DriftConfig, ConfigException } from '../types';
 
 export function loadConfig(dir: string): DriftConfig {
   const configPath = findConfig(dir);
@@ -67,6 +67,24 @@ function validate(raw: unknown, configPath: string): DriftConfig {
     ? (obj['ignore'] as string[]).filter((i) => typeof i === 'string')
     : [];
 
+  const exceptions: ConfigException[] = [];
+  if (Array.isArray(obj['exceptions'])) {
+    for (const [idx, ex] of (obj['exceptions'] as unknown[]).entries()) {
+      if (typeof ex !== 'object' || ex === null) {
+        throw new Error(`${configPath}: exceptions[${idx}] must be an object`);
+      }
+      const e = ex as Record<string, unknown>;
+      if (typeof e['from'] !== 'string') {
+        throw new Error(`${configPath}: exceptions[${idx}].from must be a string`);
+      }
+      exceptions.push({
+        from: e['from'] as string,
+        to: typeof e['to'] === 'string' ? e['to'] : undefined,
+        reason: typeof e['reason'] === 'string' ? e['reason'] : undefined,
+      });
+    }
+  }
+
   // Cross-reference validation
   for (const layer of layers) {
     if (!zones[layer]) {
@@ -81,5 +99,5 @@ function validate(raw: unknown, configPath: string): DriftConfig {
     }
   }
 
-  return { layers, zones, ignore };
+  return { layers, zones, ignore, exceptions };
 }

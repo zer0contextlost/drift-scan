@@ -54,6 +54,7 @@ Violations are ranked by blast radius: fanout (how many files in the same zone i
 drift scan [dir]          scan for violations (default: current directory)
 drift explain <file>      show all violations involving a specific file
 drift graph [dir]         print the inter-zone dependency graph
+drift stats [dir]         architecture health overview
 drift init [dir]          scaffold a .driftrc.json
 ```
 
@@ -68,6 +69,8 @@ drift init [dir]          scaffold a .driftrc.json
 | `--min-severity <severity>` | Only show violations at or above this severity |
 | `--output <file>` | Write report to file instead of stdout |
 | `--watch` | Watch for file changes and re-scan automatically |
+| `--save-baseline <file>` | Save current violations as a baseline |
+| `--from-baseline <file>` | Only report violations not present in the baseline |
 
 ### graph options
 
@@ -75,6 +78,53 @@ drift init [dir]          scaffold a .driftrc.json
 |------|-------------|
 | `--dot` | Output Graphviz DOT instead of Mermaid |
 | `--output <file>` | Write graph to file |
+
+---
+
+## Suppressing violations
+
+**Inline** — add a `drift-ignore` comment on the import line or the line above:
+
+```typescript
+// drift-ignore
+import { db } from '../infra/Database';
+
+import { db } from '../infra/Database'; // drift-ignore
+```
+
+Works in TypeScript (`// drift-ignore`), Python (`# drift-ignore`), and Go (`// drift-ignore`).
+
+**Config exceptions** — whitelist specific file paths in `.driftrc.json` without touching source:
+
+```json
+{
+  "exceptions": [
+    {
+      "from": "src/domain/legacy/**",
+      "to": "src/infra/**",
+      "reason": "migration in progress"
+    }
+  ]
+}
+```
+
+Both `from` and `to` are glob patterns (same syntax as zone `paths`). `to` is optional.
+
+---
+
+## Baseline mode
+
+Useful when adopting drift-scan on an existing codebase with pre-existing violations:
+
+```bash
+# Snapshot current state
+drift scan --save-baseline baseline.drift.json
+
+# CI: only fail on new violations introduced after the baseline
+drift scan --from-baseline baseline.drift.json --fail-on high
+```
+
+The baseline stores stable fingerprints (violation type + relative file paths + line number). Violations that move to a different line will still match as long as they're the same import.
 
 ---
 
@@ -120,6 +170,24 @@ Score = `fanout × 2 + zone_centrality` (circular: `cycle_length + zone_centrali
 ### Exit code
 
 `drift scan --fail-on high` exits 1 when any `high` or `critical` violation is found.
+
+---
+
+## TypeScript path aliases
+
+drift-scan reads `tsconfig.json` `compilerOptions.paths` and `baseUrl` automatically. Imports like `@domain/User` are resolved to their real paths before zone matching — no extra config needed.
+
+```json
+{
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": {
+      "@domain/*": ["src/domain/*"],
+      "@infra/*": ["src/infra/*"]
+    }
+  }
+}
+```
 
 ---
 

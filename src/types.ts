@@ -6,10 +6,17 @@ export interface Zone {
   canImport: string[];
 }
 
+export interface ConfigException {
+  from: string;    // glob pattern matched against fromFile (relative to project root)
+  to?: string;     // glob pattern matched against toFile (optional — any target if omitted)
+  reason?: string; // human note, not used at runtime
+}
+
 export interface DriftConfig {
   layers: string[];
   zones: Record<string, Zone>;
   ignore: string[];
+  exceptions?: ConfigException[];
 }
 
 export interface ImportStatement {
@@ -48,4 +55,6 @@ export interface ScanResult {
   scannedFiles: number;
   violations: Violation[];
   durationMs: number;
+  excepted?: number;          // violations suppressed by config exceptions
+  baselineSuppressed?: number; // violations suppressed by --from-baseline
 }
