@@ -51,6 +51,12 @@ function resolveModule(moduleName: string, fromFile: string, projectRoot: string
   return moduleName; // external package
 }
 
+function isSuppressed(lineNum: number, lines: string[]): boolean {
+  const idx = lineNum - 1;
+  const hasIgnore = (l: string | undefined) => l !== undefined && /drift-ignore/.test(l);
+  return hasIgnore(lines[idx]) || hasIgnore(lines[idx - 1]);
+}
+
 function resolveRelative(moduleName: string, fromFile: string): string {
   // moduleName starts with one or more dots: `.x`, `..x`, `...`
   const dots = moduleName.match(/^\.+/)?.[0].length ?? 1;
@@ -68,6 +74,7 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
     if (stat.size > MAX_FILE_SIZE) return [];
 
     const source = await fs.readFile(filePath, 'utf-8');
+    const lines = source.split('\n');
     await ensureInit();
     const tree = parserInstance!.parse(source);
     const imports: ImportStatement[] = [];
@@ -78,20 +85,22 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
         for (let i = 0; i < node.childCount; i++) {
           const child = node.child(i);
           if (!child) continue;
+          const lineNum = node.startPosition.row + 1;
           if (child.type === 'dotted_name') {
             imports.push({
               fromFile: filePath,
               toPath: resolveModule(child.text, filePath, projectRoot),
-              line: node.startPosition.row + 1,
+              line: lineNum,
+              suppress: isSuppressed(lineNum, lines),
             });
           } else if (child.type === 'aliased_import') {
-            // import x as y — grammar field name is 'name' for the module
             const nameNode = child.childForFieldName('name') ?? child.child(0);
             if (nameNode) {
               imports.push({
                 fromFile: filePath,
                 toPath: resolveModule(nameNode.text, filePath, projectRoot),
-                line: node.startPosition.row + 1,
+                line: lineNum,
+                suppress: isSuppressed(lineNum, lines),
               });
             }
           }
@@ -100,7 +109,6 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
 
       // from x import y  /  from . import y  /  from ..x import y
       if (node.type === 'import_from_statement') {
-        // tree-sitter-python grammar exposes field 'module_name' for the from-target
         const moduleNode =
           node.childForFieldName('module_name') ?? node.child(1);
         if (!moduleNode) return;
@@ -108,17 +116,20 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
         const moduleName = moduleNode.text;
         if (!moduleName || moduleName === 'import') return;
 
+        const lineNum = node.startPosition.row + 1;
         if (moduleName.startsWith('.')) {
           imports.push({
             fromFile: filePath,
             toPath: resolveRelative(moduleName, filePath),
-            line: node.startPosition.row + 1,
+            line: lineNum,
+            suppress: isSuppressed(lineNum, lines),
           });
         } else {
           imports.push({
             fromFile: filePath,
             toPath: resolveModule(moduleName, filePath, projectRoot),
-            line: node.startPosition.row + 1,
+            line: lineNum,
+            suppress: isSuppressed(lineNum, lines),
           });
         }
       }

@@ -16,7 +16,8 @@ export interface ImportStatement {
   fromFile: string;
   toPath: string;
   line: number;
-  typeOnly?: boolean;  // true for TypeScript `import type` statements
+  typeOnly?: boolean;   // true for TypeScript `import type` statements
+  suppress?: boolean;   // true when a drift-ignore comment is present on or above the import line
 }
 
 export interface DependencyNode {

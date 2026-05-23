@@ -3,6 +3,8 @@ import path from 'path';
 import { parse, TSESTreeOptions } from '@typescript-eslint/typescript-estree';
 import type { TSESTree } from '@typescript-eslint/typescript-estree';
 import { ImportStatement } from '../types';
+import { TsPathConfig } from '../config/tsconfig';
+import { ParserContext } from './index';
 
 const parseOptions: TSESTreeOptions = {
   jsx: true,
@@ -41,12 +43,47 @@ function walk(root: TSESTree.Node, visitor: Partial<Record<string, (n: TSESTree.
   }
 }
 
-function normalizePath(raw: string, fromFile: string): string {
-  if (!raw.startsWith('.')) return raw;
-  return path.resolve(path.dirname(fromFile), raw).split('\\').join('/');
+// Resolve a tsconfig path alias like @domain/User → absolute path
+function resolvePathAlias(raw: string, cfg: TsPathConfig): string | null {
+  for (const [pattern, targets] of Object.entries(cfg.paths)) {
+    if (!targets.length) continue;
+
+    if (pattern.endsWith('/*')) {
+      const prefix = pattern.slice(0, -2); // e.g. '@domain'
+      if (raw.startsWith(prefix + '/')) {
+        const suffix = raw.slice(prefix.length + 1); // 'User' or 'entities/User'
+        const target = targets[0];
+        const resolved = target.endsWith('/*')
+          ? path.join(cfg.baseUrl, target.slice(0, -2), suffix)
+          : path.join(cfg.baseUrl, target, suffix);
+        return resolved.split('\\').join('/');
+      }
+    } else if (raw === pattern) {
+      return path.join(cfg.baseUrl, targets[0]).split('\\').join('/');
+    }
+  }
+  return null;
 }
 
-export async function extractTsImports(filePath: string): Promise<ImportStatement[]> {
+function normalizePath(raw: string, fromFile: string, tsPathConfig?: TsPathConfig): string {
+  if (raw.startsWith('.')) {
+    return path.resolve(path.dirname(fromFile), raw).split('\\').join('/');
+  }
+  if (tsPathConfig) {
+    const alias = resolvePathAlias(raw, tsPathConfig);
+    if (alias) return alias;
+  }
+  return raw; // external package — keep as-is
+}
+
+// Returns true if the given 1-based line number, or the line above it, contains a drift-ignore comment.
+function isSuppressed(lineNum: number, lines: string[]): boolean {
+  const idx = lineNum - 1; // convert to 0-based
+  const hasIgnore = (l: string | undefined) => l !== undefined && /drift-ignore/.test(l);
+  return hasIgnore(lines[idx]) || hasIgnore(lines[idx - 1]);
+}
+
+export async function extractTsImports(filePath: string, ctx?: ParserContext): Promise<ImportStatement[]> {
   try {
     const stat = await fs.stat(filePath);
     if (stat.size > MAX_FILE_SIZE) return [];
@@ -62,18 +99,22 @@ export async function extractTsImports(filePath: string): Promise<ImportStatemen
       pos = end + 1;
     }
 
+    const lines = source.split('\n');
     const ast = parse(source, parseOptions) as TSESTree.Program;
     const imports: ImportStatement[] = [];
+    const tsPathConfig = ctx?.tsPathConfig;
 
     walk(ast, {
       ImportDeclaration(node) {
         const n = node as TSESTree.ImportDeclaration;
         if (typeof n.source.value === 'string') {
+          const lineNum = n.loc?.start.line ?? 0;
           imports.push({
             fromFile: filePath,
-            toPath: normalizePath(n.source.value, filePath),
-            line: n.loc?.start.line ?? 0,
+            toPath: normalizePath(n.source.value, filePath, tsPathConfig),
+            line: lineNum,
             typeOnly: n.importKind === 'type',
+            suppress: lineNum > 0 ? isSuppressed(lineNum, lines) : false,
           });
         }
       },
@@ -88,10 +129,12 @@ export async function extractTsImports(filePath: string): Promise<ImportStatemen
         ) {
           const val = (n.arguments[0] as TSESTree.Literal).value;
           if (typeof val === 'string') {
+            const lineNum = n.loc?.start.line ?? 0;
             imports.push({
               fromFile: filePath,
-              toPath: normalizePath(val, filePath),
-              line: n.loc?.start.line ?? 0,
+              toPath: normalizePath(val, filePath, tsPathConfig),
+              line: lineNum,
+              suppress: lineNum > 0 ? isSuppressed(lineNum, lines) : false,
             });
           }
         }
@@ -100,10 +143,12 @@ export async function extractTsImports(filePath: string): Promise<ImportStatemen
       ExportNamedDeclaration(node) {
         const n = node as TSESTree.ExportNamedDeclaration;
         if (n.source && typeof n.source.value === 'string') {
+          const lineNum = n.loc?.start.line ?? 0;
           imports.push({
             fromFile: filePath,
-            toPath: normalizePath(n.source.value, filePath),
-            line: n.loc?.start.line ?? 0,
+            toPath: normalizePath(n.source.value, filePath, tsPathConfig),
+            line: lineNum,
+            suppress: lineNum > 0 ? isSuppressed(lineNum, lines) : false,
           });
         }
       },
@@ -113,10 +158,12 @@ export async function extractTsImports(filePath: string): Promise<ImportStatemen
         if (n.source.type === 'Literal') {
           const val = (n.source as TSESTree.Literal).value;
           if (typeof val === 'string') {
+            const lineNum = n.loc?.start.line ?? 0;
             imports.push({
               fromFile: filePath,
-              toPath: normalizePath(val, filePath),
-              line: n.loc?.start.line ?? 0,
+              toPath: normalizePath(val, filePath, tsPathConfig),
+              line: lineNum,
+              suppress: lineNum > 0 ? isSuppressed(lineNum, lines) : false,
             });
           }
         }
@@ -124,10 +171,12 @@ export async function extractTsImports(filePath: string): Promise<ImportStatemen
       ExportAllDeclaration(node) {
         const n = node as TSESTree.ExportAllDeclaration;
         if (typeof n.source.value === 'string') {
+          const lineNum = n.loc?.start.line ?? 0;
           imports.push({
             fromFile: filePath,
-            toPath: normalizePath(n.source.value, filePath),
-            line: n.loc?.start.line ?? 0,
+            toPath: normalizePath(n.source.value, filePath, tsPathConfig),
+            line: lineNum,
+            suppress: lineNum > 0 ? isSuppressed(lineNum, lines) : false,
           });
         }
       },

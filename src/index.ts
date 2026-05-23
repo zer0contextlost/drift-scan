@@ -14,6 +14,7 @@ import { formatSarif } from './report/sarif';
 import { buildZoneGraph, formatMermaid, formatDot } from './report/graph';
 import { filterBySeverity } from './report/filters';
 import { readGoModuleName } from './parsers/go';
+import { readTsPathConfig } from './config/tsconfig';
 import { Severity, ScanResult, Violation, DriftConfig, DependencyNode } from './types';
 
 const VERSION = '1.5.0';
@@ -65,7 +66,8 @@ program
       if (opts.since) files = filterBySince(files, opts.since, targetDir);
 
       const goModuleName = await readGoModuleName(targetDir) ?? undefined;
-      const ctx = { projectRoot: targetDir, goModuleName };
+      const tsPathConfig = readTsPathConfig(targetDir) ?? undefined;
+      const ctx = { projectRoot: targetDir, goModuleName, tsPathConfig };
       const nodes = await buildGraph(files, targetDir, config, ctx);
       const raw = checkGraph(nodes, config);
       let violations = rankViolations(raw, config);
@@ -128,7 +130,8 @@ program
       const { default: chalk } = await import('chalk');
 
       const goModuleName = await readGoModuleName(targetDir) ?? undefined;
-      const ctx = { projectRoot: targetDir, goModuleName };
+      const tsPathConfig = readTsPathConfig(targetDir) ?? undefined;
+      const ctx = { projectRoot: targetDir, goModuleName, tsPathConfig };
 
       let debounce: ReturnType<typeof setTimeout> | null = null;
       let running = false;
@@ -226,7 +229,8 @@ program
     }
 
     const goModuleName = await readGoModuleName(rootDir) ?? undefined;
-    const ctx = { projectRoot: rootDir, goModuleName };
+    const tsPathConfig = readTsPathConfig(rootDir) ?? undefined;
+    const ctx = { projectRoot: rootDir, goModuleName, tsPathConfig };
     const files = await crawlFiles(rootDir, config);
     const nodes = await buildGraph(files, rootDir, config, ctx);
     const raw = checkGraph(nodes, config);

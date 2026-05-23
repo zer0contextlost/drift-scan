@@ -1,4 +1,5 @@
 import { ImportStatement } from '../types';
+import { TsPathConfig } from '../config/tsconfig';
 import { extractTsImports } from './typescript';
 import { extractPyImports } from './python';
 import { extractGoImports } from './go';
@@ -6,12 +7,13 @@ import { extractGoImports } from './go';
 export interface ParserContext {
   projectRoot: string;
   goModuleName?: string;
+  tsPathConfig?: TsPathConfig;
 }
 
 export async function extractImports(filePath: string, ctx: ParserContext): Promise<ImportStatement[]> {
   const lower = filePath.toLowerCase();
   if (lower.endsWith('.ts') || lower.endsWith('.tsx') || lower.endsWith('.js') || lower.endsWith('.jsx')) {
-    return extractTsImports(filePath);
+    return extractTsImports(filePath, ctx);
   }
   if (lower.endsWith('.py')) {
     return extractPyImports(filePath, ctx.projectRoot);

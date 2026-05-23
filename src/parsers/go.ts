@@ -63,21 +63,29 @@ function importPathToLocal(importPath: string, moduleName: string, projectRoot: 
   return path.join(projectRoot, suffix).split('\\').join('/');
 }
 
+function isSuppressed(lineNum: number, lines: string[]): boolean {
+  const idx = lineNum - 1;
+  const hasIgnore = (l: string | undefined) => l !== undefined && /drift-ignore/.test(l);
+  return hasIgnore(lines[idx]) || hasIgnore(lines[idx - 1]);
+}
+
 function processSpec(
   spec: Parser.SyntaxNode,
   filePath: string,
   moduleName: string,
   projectRoot: string,
   imports: ImportStatement[],
+  lines: string[],
 ): void {
   // In tree-sitter-go grammar:
   //   import_spec: seq(optional(field("name", ...)), field("path", interpreted_string_literal))
+  const lineNum = spec.startPosition.row + 1;
   const pathNode = spec.childForFieldName('path');
   if (pathNode && pathNode.type === 'interpreted_string_literal') {
-    const raw = pathNode.text.slice(1, -1); // strip surrounding quotes
+    const raw = pathNode.text.slice(1, -1);
     const local = importPathToLocal(raw, moduleName, projectRoot);
     if (local !== null) {
-      imports.push({ fromFile: filePath, toPath: local, line: spec.startPosition.row + 1 });
+      imports.push({ fromFile: filePath, toPath: local, line: lineNum, suppress: isSuppressed(lineNum, lines) });
     }
     return;
   }
@@ -89,7 +97,7 @@ function processSpec(
       const raw = child.text.slice(1, -1);
       const local = importPathToLocal(raw, moduleName, projectRoot);
       if (local !== null) {
-        imports.push({ fromFile: filePath, toPath: local, line: spec.startPosition.row + 1 });
+        imports.push({ fromFile: filePath, toPath: local, line: lineNum, suppress: isSuppressed(lineNum, lines) });
       }
     }
   }
@@ -105,6 +113,7 @@ export async function extractGoImports(
     if (stat.size > MAX_FILE_SIZE) return [];
 
     const source = await fs.readFile(filePath, 'utf-8');
+    const lines = source.split('\n');
     await ensureInit();
     const tree = parserInstance!.parse(source);
     const imports: ImportStatement[] = [];
@@ -117,14 +126,12 @@ export async function extractGoImports(
         if (!child) continue;
 
         if (child.type === 'import_spec') {
-          // Single unparenthesized import: import "path"
-          processSpec(child, filePath, moduleName, projectRoot, imports);
+          processSpec(child, filePath, moduleName, projectRoot, imports, lines);
         } else if (child.type === 'import_spec_list') {
-          // Parenthesized block: import ( "path1" \n "path2" )
           for (let j = 0; j < child.childCount; j++) {
             const spec = child.child(j);
             if (spec && spec.type === 'import_spec') {
-              processSpec(spec, filePath, moduleName, projectRoot, imports);
+              processSpec(spec, filePath, moduleName, projectRoot, imports, lines);
             }
           }
         }

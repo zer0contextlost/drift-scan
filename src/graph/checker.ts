@@ -60,6 +60,7 @@ export function checkGraph(nodes: DependencyNode[], config: DriftConfig): Violat
 
   for (const node of nodes) {
     for (const imp of node.imports) {
+      if (imp.suppress) continue;
       const toFile = resolveToFile(imp.toPath, node.file, nodeByFile);
       if (!toFile) continue;
 

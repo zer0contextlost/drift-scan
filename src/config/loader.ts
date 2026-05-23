@@ -67,5 +67,19 @@ function validate(raw: unknown, configPath: string): DriftConfig {
     ? (obj['ignore'] as string[]).filter((i) => typeof i === 'string')
     : [];
 
+  // Cross-reference validation
+  for (const layer of layers) {
+    if (!zones[layer]) {
+      throw new Error(`${configPath}: layers includes "${layer}" which is not defined in zones`);
+    }
+  }
+  for (const [name, zone] of Object.entries(zones)) {
+    for (const dep of zone.canImport) {
+      if (!zones[dep]) {
+        throw new Error(`${configPath}: zones.${name}.canImport references unknown zone "${dep}"`);
+      }
+    }
+  }
+
   return { layers, zones, ignore };
 }
