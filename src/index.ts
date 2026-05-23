@@ -5,7 +5,7 @@ import { execSync } from 'child_process';
 import { Command } from 'commander';
 import { loadConfig } from './config/loader';
 import { crawlFiles } from './crawler';
-import { buildGraph } from './graph/builder';
+import { buildGraph, buildNodeForFile } from './graph/builder';
 import { checkGraph } from './graph/checker';
 import { rankViolations } from './rank';
 import { printReport } from './report/terminal';
@@ -14,7 +14,7 @@ import { formatSarif } from './report/sarif';
 import { buildZoneGraph, formatMermaid, formatDot } from './report/graph';
 import { filterBySeverity } from './report/filters';
 import { readGoModuleName } from './parsers/go';
-import { Severity, ScanResult, Violation, DriftConfig } from './types';
+import { Severity, ScanResult, Violation, DriftConfig, DependencyNode } from './types';
 
 const VERSION = '1.5.0';
 
@@ -127,17 +127,55 @@ program
       const chokidar = await import('chokidar');
       const { default: chalk } = await import('chalk');
 
+      const goModuleName = await readGoModuleName(targetDir) ?? undefined;
+      const ctx = { projectRoot: targetDir, goModuleName };
+
       let debounce: ReturnType<typeof setTimeout> | null = null;
       let running = false;
+      let nodeCache: Map<string, DependencyNode> | null = null;
 
-      const doScan = async () => {
+      const buildAndEmit = async (nodes: DependencyNode[], start: number) => {
+        const raw = checkGraph(nodes, config);
+        let violations = rankViolations(raw, config);
+        if (opts.minSeverity) violations = filterBySeverity(violations, opts.minSeverity as Severity);
+        const result: ScanResult = {
+          version: VERSION,
+          scannedFiles: nodeCache!.size,
+          violations,
+          durationMs: Date.now() - start,
+        };
+        await emit(result);
+      };
+
+      const doScan = async (changedFile?: string) => {
         if (running) return;
         running = true;
-        process.stdout.write('\x1Bc'); // clear screen
-        console.log(chalk.gray(`  watching ${targetDir} — press Ctrl+C to stop\n`));
+        process.stdout.write('\x1Bc');
+        const label = changedFile ? path.relative(targetDir, changedFile) : 'full scan';
+        console.log(chalk.gray(`  watching ${targetDir} · ${label} · Ctrl+C to stop\n`));
         try {
-          const { result } = await runScan();
-          await emit(result);
+          const start = Date.now();
+          const isConfig = changedFile && path.basename(changedFile) === '.driftrc.json';
+
+          if (!nodeCache || !changedFile || isConfig) {
+            // Full scan: initial run or config file changed
+            if (isConfig) {
+              try { config = loadConfig(targetDir); } catch { /* keep old */ }
+            }
+            const files = await crawlFiles(targetDir, config);
+            const nodes = await buildGraph(files, targetDir, config, ctx);
+            nodeCache = new Map(nodes.map((n) => [n.file, n]));
+            await buildAndEmit(nodes, start);
+          } else {
+            // Incremental: re-parse only the changed file
+            if (fs.existsSync(changedFile)) {
+              const node = await buildNodeForFile(changedFile, targetDir, config, ctx);
+              nodeCache.set(changedFile, node);
+            } else {
+              nodeCache.delete(changedFile);
+            }
+            await buildAndEmit(Array.from(nodeCache.values()), start);
+          }
         } catch (e) {
           console.error((e as Error).message);
         }
@@ -152,9 +190,9 @@ program
         persistent: true,
       });
 
-      const onChange = () => {
+      const onChange = (filePath: string) => {
         if (debounce) clearTimeout(debounce);
-        debounce = setTimeout(doScan, 300);
+        debounce = setTimeout(() => doScan(filePath), 300);
       };
 
       watcher.on('change', onChange).on('add', onChange).on('unlink', onChange);

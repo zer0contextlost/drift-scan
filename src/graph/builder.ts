@@ -6,37 +6,59 @@ function toFwdSlash(p: string): string {
   return p.split('\\').join('/');
 }
 
-// Convert a glob pattern to a regex. Handles:
-//   **   → matches any path segment (including slashes)
-//   *    → matches any non-slash chars
-//   no * → treated as directory prefix (matches path itself or any file underneath)
-function globToRegex(pattern: string): RegExp {
-  const hasWildcard = pattern.includes('*');
-
-  let escaped = pattern
-    .replace(/[.+^${}()|[\]\\]/g, '\\$&') // escape regex specials except * which we handle
-    .replace(/\*\*/g, '\x00DS\x00')        // placeholder for **
-    .replace(/\*/g, '[^/]+')               // * → one or more non-slash chars
-    .replace(/\x00DS\x00/g, '.*');         // ** → anything including slashes
-
-  // If no wildcard, treat as directory prefix: match the dir itself or any child
-  if (!hasWildcard) {
-    escaped = `${escaped}(/.*)?`;
+// Expand brace alternatives: `{a,b}/**` → [`a/**`, `b/**`]. Handles multiple/nested groups.
+function expandBraces(pattern: string): string[] {
+  const match = /\{([^{}]+)\}/.exec(pattern);
+  if (!match) return [pattern];
+  const alternatives = match[1].split(',');
+  const results: string[] = [];
+  for (const alt of alternatives) {
+    const expanded = pattern.slice(0, match.index) + alt.trim() + pattern.slice(match.index + match[0].length);
+    results.push(...expandBraces(expanded));
   }
-
-  return new RegExp(`^${escaped}$`);
+  return results;
 }
 
-function assignZone(file: string, rootDir: string, config: DriftConfig): string | null {
+// Convert a single (brace-free) glob pattern to a RegExp.
+//   **  → any path including slashes
+//   *   → any non-slash chars
+//   ?   → single non-slash char
+//   bare path with no wildcards → directory prefix (path itself or any child)
+function globToRegex(pattern: string): RegExp {
+  const p = pattern.replace(/\/+$/, ''); // strip trailing slashes
+  const hasWildcard = p.includes('*') || p.includes('?');
+
+  const escaped = p
+    .replace(/[.+^${}()|[\]\\]/g, '\\$&')  // escape regex specials (no braces left at this point)
+    .replace(/\*\*/g, '\x00DSTAR\x00')      // protect ** before single-star replace
+    .replace(/\*/g, '[^/]+')
+    .replace(/\x00DSTAR\x00/g, '.*')
+    .replace(/\?/g, '[^/]');
+
+  const suffix = hasWildcard ? '' : '(/.*)?';
+  return new RegExp(`^${escaped}${suffix}$`);
+}
+
+export function assignZone(file: string, rootDir: string, config: DriftConfig): string | null {
   const relFile = toFwdSlash(path.relative(rootDir, file));
   for (const [zoneName, zone] of Object.entries(config.zones)) {
     for (const pattern of zone.paths) {
-      if (globToRegex(pattern).test(relFile)) {
-        return zoneName;
+      for (const expanded of expandBraces(pattern)) {
+        if (globToRegex(expanded).test(relFile)) return zoneName;
       }
     }
   }
   return null;
+}
+
+export async function buildNodeForFile(
+  file: string,
+  rootDir: string,
+  config: DriftConfig,
+  ctx: ParserContext,
+): Promise<DependencyNode> {
+  const imports = await extractImports(file, ctx);
+  return { file, zone: assignZone(file, rootDir, config), imports };
 }
 
 export async function buildGraph(
@@ -45,15 +67,5 @@ export async function buildGraph(
   config: DriftConfig,
   ctx: ParserContext,
 ): Promise<DependencyNode[]> {
-  const nodes = await Promise.all(
-    files.map(async (file) => {
-      const imports = await extractImports(file, ctx);
-      return {
-        file,
-        zone: assignZone(file, rootDir, config),
-        imports,
-      };
-    })
-  );
-  return nodes;
+  return Promise.all(files.map((file) => buildNodeForFile(file, rootDir, config, ctx)));
 }

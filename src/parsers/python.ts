@@ -37,24 +37,29 @@ function walkPython(node: Parser.SyntaxNode, visitor: (n: Parser.SyntaxNode) => 
   }
 }
 
-// Resolve a Python module path to a file path relative to project root
 function resolveModule(moduleName: string, fromFile: string, projectRoot: string): string {
-  // Convert dotted module name to path segments
-  const parts = moduleName.split('.');
-  const relative = parts.join('/');
-
-  // Try resolving relative to project root first, then relative to the file
+  const relative = moduleName.split('.').join('/');
   const fromRoot = path.join(projectRoot, relative);
-  const fromDir = path.join(path.dirname(fromFile), relative);
-
-  // Return the path that's more likely internal (under project root)
   const absRoot = path.resolve(fromRoot).split('\\').join('/');
-  const absDir = path.resolve(fromDir).split('\\').join('/');
   const projAbs = path.resolve(projectRoot).split('\\').join('/');
-
   if (absRoot.startsWith(projAbs)) return absRoot;
+
+  const fromDir = path.join(path.dirname(fromFile), relative);
+  const absDir = path.resolve(fromDir).split('\\').join('/');
   if (absDir.startsWith(projAbs)) return absDir;
-  return moduleName; // external package — keep as-is
+
+  return moduleName; // external package
+}
+
+function resolveRelative(moduleName: string, fromFile: string): string {
+  // moduleName starts with one or more dots: `.x`, `..x`, `...`
+  const dots = moduleName.match(/^\.+/)?.[0].length ?? 1;
+  const rest = moduleName.slice(dots).split('.').join('/');
+  let base = path.dirname(fromFile);
+  for (let i = 1; i < dots; i++) base = path.dirname(base);
+  return rest
+    ? path.join(base, rest).split('\\').join('/')
+    : base.split('\\').join('/');
 }
 
 export async function extractPyImports(filePath: string, projectRoot: string): Promise<ImportStatement[]> {
@@ -68,19 +73,24 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
     const imports: ImportStatement[] = [];
 
     walkPython(tree.rootNode, (node) => {
+      // import x  /  import x as y  /  import x, y
       if (node.type === 'import_statement') {
-        // import x, y, z
         for (let i = 0; i < node.childCount; i++) {
           const child = node.child(i);
           if (!child) continue;
-          if (child.type === 'dotted_name' || child.type === 'aliased_import') {
-            const name = child.type === 'aliased_import'
-              ? child.child(0)?.text ?? ''
-              : child.text;
-            if (name) {
+          if (child.type === 'dotted_name') {
+            imports.push({
+              fromFile: filePath,
+              toPath: resolveModule(child.text, filePath, projectRoot),
+              line: node.startPosition.row + 1,
+            });
+          } else if (child.type === 'aliased_import') {
+            // import x as y — grammar field name is 'name' for the module
+            const nameNode = child.childForFieldName('name') ?? child.child(0);
+            if (nameNode) {
               imports.push({
                 fromFile: filePath,
-                toPath: resolveModule(name, filePath, projectRoot),
+                toPath: resolveModule(nameNode.text, filePath, projectRoot),
                 line: node.startPosition.row + 1,
               });
             }
@@ -88,28 +98,28 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
         }
       }
 
+      // from x import y  /  from . import y  /  from ..x import y
       if (node.type === 'import_from_statement') {
-        // from x import y
-        const moduleNode = node.child(1); // 'from <module>'
-        if (moduleNode && (moduleNode.type === 'dotted_name' || moduleNode.type === 'relative_import')) {
-          let moduleName = moduleNode.text;
-          // relative imports start with dots — resolve relative to file
-          if (moduleName.startsWith('.')) {
-            const dots = moduleName.match(/^\.+/)?.[0].length ?? 0;
-            const rest = moduleName.slice(dots);
-            let base = path.dirname(filePath);
-            for (let i = 1; i < dots; i++) base = path.dirname(base);
-            const resolved = rest
-              ? path.join(base, rest.split('.').join('/')).split('\\').join('/')
-              : base.split('\\').join('/');
-            imports.push({ fromFile: filePath, toPath: resolved, line: node.startPosition.row + 1 });
-          } else {
-            imports.push({
-              fromFile: filePath,
-              toPath: resolveModule(moduleName, filePath, projectRoot),
-              line: node.startPosition.row + 1,
-            });
-          }
+        // tree-sitter-python grammar exposes field 'module_name' for the from-target
+        const moduleNode =
+          node.childForFieldName('module_name') ?? node.child(1);
+        if (!moduleNode) return;
+
+        const moduleName = moduleNode.text;
+        if (!moduleName || moduleName === 'import') return;
+
+        if (moduleName.startsWith('.')) {
+          imports.push({
+            fromFile: filePath,
+            toPath: resolveRelative(moduleName, filePath),
+            line: node.startPosition.row + 1,
+          });
+        } else {
+          imports.push({
+            fromFile: filePath,
+            toPath: resolveModule(moduleName, filePath, projectRoot),
+            line: node.startPosition.row + 1,
+          });
         }
       }
     });
