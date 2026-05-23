@@ -37,18 +37,22 @@ function walkPython(node: Parser.SyntaxNode, visitor: (n: Parser.SyntaxNode) => 
   }
 }
 
-function resolveModule(moduleName: string, fromFile: string, projectRoot: string): string {
+function resolveModule(moduleName: string, fromFile: string, projectRoot: string): string[] {
   const relative = moduleName.split('.').join('/');
-  const fromRoot = path.join(projectRoot, relative);
-  const absRoot = path.resolve(fromRoot).split('\\').join('/');
   const projAbs = path.resolve(projectRoot).split('\\').join('/');
-  if (absRoot.startsWith(projAbs)) return absRoot;
+  const candidates: string[] = [];
 
+  // Same-directory resolution (for flat projects where cwd is added to sys.path)
   const fromDir = path.join(path.dirname(fromFile), relative);
   const absDir = path.resolve(fromDir).split('\\').join('/');
-  if (absDir.startsWith(projAbs)) return absDir;
+  if (absDir.startsWith(projAbs)) candidates.push(absDir);
 
-  return moduleName; // external package
+  // Project-root resolution (for installed packages / top-level modules)
+  const fromRoot = path.join(projectRoot, relative);
+  const absRoot = path.resolve(fromRoot).split('\\').join('/');
+  if (absRoot.startsWith(projAbs)) candidates.push(absRoot);
+
+  return candidates.length > 0 ? candidates : [moduleName];
 }
 
 function isSuppressed(lineNum: number, lines: string[]): boolean {
@@ -86,22 +90,17 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
           const child = node.child(i);
           if (!child) continue;
           const lineNum = node.startPosition.row + 1;
+          const suppress = isSuppressed(lineNum, lines);
           if (child.type === 'dotted_name') {
-            imports.push({
-              fromFile: filePath,
-              toPath: resolveModule(child.text, filePath, projectRoot),
-              line: lineNum,
-              suppress: isSuppressed(lineNum, lines),
-            });
+            for (const toPath of resolveModule(child.text, filePath, projectRoot)) {
+              imports.push({ fromFile: filePath, toPath, line: lineNum, suppress });
+            }
           } else if (child.type === 'aliased_import') {
             const nameNode = child.childForFieldName('name') ?? child.child(0);
             if (nameNode) {
-              imports.push({
-                fromFile: filePath,
-                toPath: resolveModule(nameNode.text, filePath, projectRoot),
-                line: lineNum,
-                suppress: isSuppressed(lineNum, lines),
-              });
+              for (const toPath of resolveModule(nameNode.text, filePath, projectRoot)) {
+                imports.push({ fromFile: filePath, toPath, line: lineNum, suppress });
+              }
             }
           }
         }
@@ -117,20 +116,18 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
         if (!moduleName || moduleName === 'import') return;
 
         const lineNum = node.startPosition.row + 1;
+        const suppress = isSuppressed(lineNum, lines);
         if (moduleName.startsWith('.')) {
           imports.push({
             fromFile: filePath,
             toPath: resolveRelative(moduleName, filePath),
             line: lineNum,
-            suppress: isSuppressed(lineNum, lines),
+            suppress,
           });
         } else {
-          imports.push({
-            fromFile: filePath,
-            toPath: resolveModule(moduleName, filePath, projectRoot),
-            line: lineNum,
-            suppress: isSuppressed(lineNum, lines),
-          });
+          for (const toPath of resolveModule(moduleName, filePath, projectRoot)) {
+            imports.push({ fromFile: filePath, toPath, line: lineNum, suppress });
+          }
         }
       }
     });

@@ -67,7 +67,7 @@ program
       process.exit(1);
     }
 
-    const runScan = async (): Promise<{ result: ScanResult; exitCode: number }> => {
+    const runScan = async (): Promise<{ result: ScanResult; exitCode: number; noEmit?: boolean }> => {
       const start = Date.now();
       let files = await crawlFiles(targetDir, config);
       if (opts.since) files = filterBySince(files, opts.since, targetDir);
@@ -87,7 +87,7 @@ program
       if (opts.saveBaseline) {
         saveBaseline(violations, targetDir, opts.saveBaseline, VERSION);
         console.log(`baseline saved to ${opts.saveBaseline} (${violations.length} violations)`);
-        return { result: { version: VERSION, scannedFiles: files.length, violations, durationMs: Date.now() - start }, exitCode: 0 };
+        return { result: { version: VERSION, scannedFiles: files.length, violations, durationMs: Date.now() - start }, exitCode: 0, noEmit: true };
       }
 
       // --from-baseline: suppress violations already in baseline
@@ -236,8 +236,8 @@ program
       return; // keep process alive
     }
 
-    const { result, exitCode } = await runScan();
-    await emit(result);
+    const { result, exitCode, noEmit } = await runScan();
+    if (!noEmit) await emit(result);
     if (exitCode !== 0) process.exit(exitCode);
   });
 

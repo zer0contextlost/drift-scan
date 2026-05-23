@@ -1,7 +1,7 @@
 import path from 'path';
 import { ScanResult, Severity } from '../types';
 
-const VERSION = '1.0.0';
+const VERSION = '1.5.0';
 
 const SEVERITY_ICONS: Record<Severity, string> = {
   critical: '●',

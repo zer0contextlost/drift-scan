@@ -61,12 +61,15 @@ export async function printStats(
       violations: zoneViolations.get(name) ?? 0,
     }));
 
-  // Health score: fraction of cross-zone imports that are clean
+  // Health score: of all cross-zone imports between defined zones, what fraction are clean?
+  // Undeclared violations are excluded — they come from files outside any zone, which
+  // aren't represented in the cross-zone import denominator.
   const totalCross = stats.reduce((s, z) => s + z.crossZoneImports, 0);
+  const structuralViols = violations.filter((v) => v.type === 'layer' || v.type === 'circular').length;
   const totalViols = violations.length;
   const health = totalCross === 0
-    ? (totalViols === 0 ? 100 : 0)
-    : Math.round(Math.max(0, (1 - totalViols / totalCross) * 100));
+    ? (structuralViols === 0 ? 100 : 0)
+    : Math.round(Math.max(0, (1 - structuralViols / totalCross) * 100));
 
   const totalFiles = nodes.length;
   const unzoned = nodes.filter((n) => !n.zone).length;
@@ -100,7 +103,10 @@ export async function printStats(
   console.log('');
 
   const healthColor = health >= 90 ? chalk.green : health >= 70 ? chalk.yellow : chalk.red;
-  console.log(`  Health score: ${healthColor.bold(health + '%')}  (${totalViols} violations · ${totalFiles} files)`);
+  const violSummary = structuralViols !== totalViols
+    ? `${structuralViols} structural · ${totalViols - structuralViols} undeclared`
+    : `${totalViols} violations`;
+  console.log(`  Health score: ${healthColor.bold(health + '%')}  (${violSummary} · ${totalFiles} files)`);
 
   // Top hotspots by fanout
   const byFanout = [...violations]
