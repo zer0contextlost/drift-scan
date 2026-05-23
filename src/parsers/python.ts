@@ -1,4 +1,5 @@
 import fs from 'fs/promises';
+import { existsSync } from 'fs';
 import path from 'path';
 import Parser from 'web-tree-sitter';
 import { ImportStatement } from '../types';
@@ -37,17 +38,22 @@ function walkPython(node: Parser.SyntaxNode, visitor: (n: Parser.SyntaxNode) => 
   }
 }
 
-function resolveModule(moduleName: string, fromFile: string, projectRoot: string): string[] {
+// isPackage: true when fromFile lives inside a Python package (directory has __init__.py).
+// Absolute imports in packages refer to stdlib/installed packages, not same-directory modules.
+// Only flat scripts (no __init__.py) should use same-directory resolution.
+function resolveModule(moduleName: string, fromFile: string, projectRoot: string, isPackage: boolean): string[] {
   const relative = moduleName.split('.').join('/');
   const projAbs = path.resolve(projectRoot).split('\\').join('/');
   const candidates: string[] = [];
 
-  // Same-directory resolution (for flat projects where cwd is added to sys.path)
-  const fromDir = path.join(path.dirname(fromFile), relative);
-  const absDir = path.resolve(fromDir).split('\\').join('/');
-  if (absDir.startsWith(projAbs)) candidates.push(absDir);
+  // Same-directory resolution only for flat scripts (not packages)
+  if (!isPackage) {
+    const fromDir = path.join(path.dirname(fromFile), relative);
+    const absDir = path.resolve(fromDir).split('\\').join('/');
+    if (absDir.startsWith(projAbs)) candidates.push(absDir);
+  }
 
-  // Project-root resolution (for installed packages / top-level modules)
+  // Project-root resolution (for top-level modules)
   const fromRoot = path.join(projectRoot, relative);
   const absRoot = path.resolve(fromRoot).split('\\').join('/');
   if (absRoot.startsWith(projAbs)) candidates.push(absRoot);
@@ -96,6 +102,9 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
     const tree = parserInstance!.parse(source);
     const imports: ImportStatement[] = [];
 
+    // Absolute imports in packages (dirs with __init__.py) refer to stdlib/external, not local files.
+    const isPackage = existsSync(path.join(path.dirname(filePath), '__init__.py'));
+
     walkPython(tree.rootNode, (node) => {
       // import x  /  import x as y  /  import x, y
       if (node.type === 'import_statement') {
@@ -106,13 +115,13 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
           const lineNum = node.startPosition.row + 1;
           const suppress = isSuppressed(lineNum, lines);
           if (child.type === 'dotted_name') {
-            for (const toPath of resolveModule(child.text, filePath, projectRoot)) {
+            for (const toPath of resolveModule(child.text, filePath, projectRoot, isPackage)) {
               imports.push({ fromFile: filePath, toPath, line: lineNum, suppress, typeOnly });
             }
           } else if (child.type === 'aliased_import') {
             const nameNode = child.childForFieldName('name') ?? child.child(0);
             if (nameNode) {
-              for (const toPath of resolveModule(nameNode.text, filePath, projectRoot)) {
+              for (const toPath of resolveModule(nameNode.text, filePath, projectRoot, isPackage)) {
                 imports.push({ fromFile: filePath, toPath, line: lineNum, suppress, typeOnly });
               }
             }
@@ -141,7 +150,7 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
             typeOnly,
           });
         } else {
-          for (const toPath of resolveModule(moduleName, filePath, projectRoot)) {
+          for (const toPath of resolveModule(moduleName, filePath, projectRoot, isPackage)) {
             imports.push({ fromFile: filePath, toPath, line: lineNum, suppress, typeOnly });
           }
         }

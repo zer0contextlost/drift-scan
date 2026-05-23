@@ -67,7 +67,7 @@ export function checkGraph(nodes: DependencyNode[], config: DriftConfig): Violat
 
   for (const node of nodes) {
     for (const imp of node.imports) {
-      if (imp.suppress) continue;
+      if (imp.suppress || imp.typeOnly) continue;
       const toFile = resolveToFile(imp.toPath, node.file, nodeByFile);
       if (!toFile) continue;
 
@@ -177,9 +177,13 @@ function detectCycles(nodes: DependencyNode[], nodeByFile: Map<string, Dependenc
 
     const node = nodeByFile.get(file);
     if (node) {
+      // Deduplicate cross-zone targets to avoid reporting the same cycle once per import statement
+      const seen = new Set<string>();
       for (const imp of node.imports) {
+        if (imp.typeOnly || imp.suppress) continue;
         const toFile = resolveToFile(imp.toPath, file, nodeByFile);
-        if (!toFile) continue;
+        if (!toFile || seen.has(toFile)) continue;
+        seen.add(toFile);
         const toNode = nodeByFile.get(toFile);
         if (toNode && toNode.zone !== node.zone) {
           dfs(toFile, stack);
@@ -197,5 +201,19 @@ function detectCycles(nodes: DependencyNode[], nodeByFile: Map<string, Dependenc
     }
   }
 
-  return cycles;
+  return deduplicateCycles(cycles);
+}
+
+function deduplicateCycles(cycles: string[][]): string[][] {
+  const seen = new Set<string>();
+  return cycles.filter((cycle) => {
+    // Normalize: find the smallest file in the cycle and rotate to start there
+    const nodes = cycle.slice(0, -1); // drop the repeated last node
+    const minIdx = nodes.indexOf(nodes.reduce((a, b) => (a < b ? a : b)));
+    const rotated = [...nodes.slice(minIdx), ...nodes.slice(0, minIdx)];
+    const key = rotated.join('|');
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
