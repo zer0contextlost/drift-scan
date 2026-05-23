@@ -1,0 +1,8 @@
+{
+  "layers": ["domain", "infrastructure"],
+  "zones": {
+    "domain":         { "paths": ["domain/**"], "canImport": [] },
+    "infrastructure": { "paths": ["infra/**"],  "canImport": ["domain"] }
+  },
+  "ignore": []
+}

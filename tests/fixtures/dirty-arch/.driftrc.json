@@ -1,0 +1,10 @@
+{
+  "layers": ["domain", "application", "adapter", "infrastructure"],
+  "zones": {
+    "domain":         { "paths": ["src/domain/**"],   "canImport": [] },
+    "application":    { "paths": ["src/app/**"],      "canImport": ["domain"] },
+    "adapter":        { "paths": ["src/adapters/**"], "canImport": ["domain", "application"] },
+    "infrastructure": { "paths": ["src/infra/**"],    "canImport": ["domain", "application", "adapter"] }
+  },
+  "ignore": []
+}

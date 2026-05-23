@@ -1,0 +1,9 @@
+{
+  "layers": ["domain", "application", "infrastructure"],
+  "zones": {
+    "domain":         { "paths": ["src/domain/**"], "canImport": [] },
+    "application":    { "paths": ["src/app/**"],    "canImport": ["domain"] },
+    "infrastructure": { "paths": ["src/infra/**"],  "canImport": ["domain", "application"] }
+  },
+  "ignore": ["**/*.test.ts", "**/*.spec.ts"]
+}

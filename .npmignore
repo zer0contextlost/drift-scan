@@ -1,0 +1,8 @@
+src/
+tests/
+.github/
+*.txt
+scratch*
+jest.config.js
+tsconfig.json
+.eslintrc*
