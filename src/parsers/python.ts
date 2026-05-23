@@ -72,6 +72,19 @@ function resolveRelative(moduleName: string, fromFile: string): string {
     : base.split('\\').join('/');
 }
 
+// Returns true if the node is inside an `if TYPE_CHECKING:` block
+function isInsideTypeCheckingGuard(node: Parser.SyntaxNode): boolean {
+  let cur: Parser.SyntaxNode | null = node.parent;
+  while (cur) {
+    if (cur.type === 'if_statement') {
+      const cond = cur.childForFieldName('condition');
+      if (cond && /\bTYPE_CHECKING\b/.test(cond.text)) return true;
+    }
+    cur = cur.parent;
+  }
+  return false;
+}
+
 export async function extractPyImports(filePath: string, projectRoot: string): Promise<ImportStatement[]> {
   try {
     const stat = await fs.stat(filePath);
@@ -86,6 +99,7 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
     walkPython(tree.rootNode, (node) => {
       // import x  /  import x as y  /  import x, y
       if (node.type === 'import_statement') {
+        const typeOnly = isInsideTypeCheckingGuard(node);
         for (let i = 0; i < node.childCount; i++) {
           const child = node.child(i);
           if (!child) continue;
@@ -93,13 +107,13 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
           const suppress = isSuppressed(lineNum, lines);
           if (child.type === 'dotted_name') {
             for (const toPath of resolveModule(child.text, filePath, projectRoot)) {
-              imports.push({ fromFile: filePath, toPath, line: lineNum, suppress });
+              imports.push({ fromFile: filePath, toPath, line: lineNum, suppress, typeOnly });
             }
           } else if (child.type === 'aliased_import') {
             const nameNode = child.childForFieldName('name') ?? child.child(0);
             if (nameNode) {
               for (const toPath of resolveModule(nameNode.text, filePath, projectRoot)) {
-                imports.push({ fromFile: filePath, toPath, line: lineNum, suppress });
+                imports.push({ fromFile: filePath, toPath, line: lineNum, suppress, typeOnly });
               }
             }
           }
@@ -117,16 +131,18 @@ export async function extractPyImports(filePath: string, projectRoot: string): P
 
         const lineNum = node.startPosition.row + 1;
         const suppress = isSuppressed(lineNum, lines);
+        const typeOnly = isInsideTypeCheckingGuard(node);
         if (moduleName.startsWith('.')) {
           imports.push({
             fromFile: filePath,
             toPath: resolveRelative(moduleName, filePath),
             line: lineNum,
             suppress,
+            typeOnly,
           });
         } else {
           for (const toPath of resolveModule(moduleName, filePath, projectRoot)) {
-            imports.push({ fromFile: filePath, toPath, line: lineNum, suppress });
+            imports.push({ fromFile: filePath, toPath, line: lineNum, suppress, typeOnly });
           }
         }
       }
